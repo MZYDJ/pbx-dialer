@@ -44,6 +44,16 @@ gcc -O2 -municode -mwindows -static dialer.c -o 拨号.exe -lws2_32 -luser32 -lg
 > 为什么不用 Qt / Electron / .NET？—— 这个工具只需要一个窗口、一个下拉框、
 > 一个日志框。138 KB 的 exe 和 50 MB 的 Electron 相比，在离线内网里差距是"能拷进 U 盘"和"不能"。
 
+## 现场排障模式
+
+默认界面上没有【诊断】【复制日志】——用不上的人看着干净。现场要排障时，
+把 `pbxdialer.ini` 里的 `show_diag` 改成 `1` 重启，两个按钮就回来了：
+
+![诊断模式](docs/screenshot-diag.png)
+
+【诊断】发一条自定义报文（内容取 `test_topic`/`test_payload`），用来在现场试探
+正确的主题和报文格式；【复制日志】把 `pbxdialer_debug.log` 拷到剪贴板，直接发给技术支持。
+
 ## 兼容性
 
 **只支持国威（Smart PBX Manager）这一套 MQTT API**，包括国威给其他品牌做的 OEM 贴牌机。
