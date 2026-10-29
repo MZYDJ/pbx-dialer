@@ -1,0 +1,11 @@
+# 编译产物与运行时生成的文件
+*.exe
+*.o
+*.obj
+pbxdialer.ini
+pbxdialer_debug.log
+
+# 测试临时文件
+test/*.out
+test/__pycache__/
+__pycache__/
