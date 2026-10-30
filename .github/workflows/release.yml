@@ -1,0 +1,55 @@
+name: Release
+
+# 打 tag（v*）时自动：编译 exe -> 打包 zip -> 建 Release 并挂附件
+# 用仓库自带的 GITHUB_TOKEN，不需要额外的 Personal Access Token
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 MinGW-w64
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64
+
+      - name: 编译
+        run: |
+          x86_64-w64-mingw32-gcc -O2 -municode -mwindows -static \
+            dialer.c -o 拨号.exe \
+            -lws2_32 -luser32 -lgdi32
+          ls -l 拨号.exe
+          file 拨号.exe || true
+
+      - name: 打包
+        run: |
+          mkdir -p pkg
+          cp 拨号.exe 使用说明.txt 兼容性说明.md README.md pkg/
+          cd pkg && zip -r ../pbx-dialer-${{ github.ref_name }}-win64.zip .
+          cd .. && ls -l pbx-dialer-*.zip
+
+      - name: 建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body: |
+            单文件绿色版 Windows 拨号器（国威 Smart PBX Manager 的 MQTT 接口）。
+
+            - 免安装：解压后双击 `拨号.exe`
+            - 首次运行会被 SmartScreen 拦一下：更多信息 → 仍要运行
+            - 详细用法见包内 `使用说明.txt`
+
+            本包由 GitHub Actions 从该 tag 的源码自动编译（MinGW-w64，静态链接）。
+          files: |
+            pbx-dialer-${{ github.ref_name }}-win64.zip
+            拨号.exe
+          fail_on_unmatched_files: true
