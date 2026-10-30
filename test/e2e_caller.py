@@ -27,27 +27,25 @@ IDC_CALLER, IDC_CALLEE, IDC_LOG = 1009, 1010, 1014
 IDC_DIAL, IDC_REFRESH = 1012, 1017
 WM_GETTEXT, WM_GETTEXTLENGTH, BM_CLICK, CB_SETCURSEL = 0x000D, 0x000E, 0x00F5, 0x014E
 CB_GETCOUNT, CB_GETLBTEXT = 0x0146, 0x0148
-IDC_HISTBTN, IDC_HISTLIST = 1018, 1019
-WM_COMMAND, LB_SETCURSEL, LB_GETCOUNT = 0x0111, 0x0186, 0x018B
-LBN_SELCHANGE, LBN_DBLCLK = 1, 2
+CB_SHOWDROPDOWN = 0x014F
 
 
 def hist_open(hwnd):
-    """点 ▼ 打开被叫历史弹出列表, 返回列表窗口句柄"""
-    u.PostMessageW(u.GetDlgItem(hwnd, IDC_HISTBTN), BM_CLICK, 0, 0)
-    time.sleep(0.4)
-    return u.FindWindowW(None, HIST_TITLE)
+    """展开被叫历史下拉框, 返回下拉框句柄"""
+    h = u.GetDlgItem(hwnd, IDC_CALLEE)
+    u.SendMessageW(h, CB_SHOWDROPDOWN, 1, 0)
+    time.sleep(0.25)
+    return h
 
 
-def hist_click(hwnd, idx, notify=LBN_SELCHANGE):
-    """在历史列表里选中第 idx 条并发出通知 (SELCHANGE=单击, DBLCLK=双击)"""
-    lst = hist_open(hwnd)
-    u.SendMessageW(lst, LB_SETCURSEL, idx, 0)
-    u.SendMessageW(hwnd, WM_COMMAND, (notify << 16) | IDC_HISTLIST, lst)
+def hist_click(hwnd, idx, notify=None):
+    """选中第 idx 条 (下拉框选中即填入被叫框)"""
+    h = u.GetDlgItem(hwnd, IDC_CALLEE)
+    u.SendMessageW(h, CB_SETCURSEL, idx, 0)
     time.sleep(0.3)
-    return lst
+    return h
 
-# 测试前先清掉可能残留的实例 (单实例保护会让新进程直接退出)
+
 for _n in ("pbxdialer.exe", "\u62e8\u53f7.exe"):
     try:
         subprocess.run(["taskkill", "/F", "/IM", _n],
@@ -129,9 +127,9 @@ callee_txt = text_of(hwnd, IDC_CALLEE)
 check("被叫不自动回填", callee_txt.strip() == "", "被叫框=[%s]" % callee_txt)
 
 lst = hist_open(hwnd)
-check("历史列表弹出", lst != 0 and u.IsWindowVisible(lst))
-check("历史列表有 2 条", u.SendMessageW(lst, LB_GETCOUNT, 0, 0) == 2,
-      "count=%d" % u.SendMessageW(lst, LB_GETCOUNT, 0, 0))
+check("被叫下拉框展开", lst != 0 and u.SendMessageW(lst, CB_GETCOUNT, 0, 0) == 2)
+check("历史列表有 2 条", u.SendMessageW(lst, CB_GETCOUNT, 0, 0) == 2,
+      "count=%d" % u.SendMessageW(lst, CB_GETCOUNT, 0, 0))
 hist_click(hwnd, 0)
 check("单击历史第1条填入 8002", text_of(hwnd, IDC_CALLEE).strip() == "8002",
       "被叫框=[%s]" % text_of(hwnd, IDC_CALLEE))
@@ -146,8 +144,9 @@ caller = text_of(hwnd, IDC_CALLER)
 check("刷新后主叫不被覆盖", caller.strip() == "3149", "主叫框=[%s]" % caller)
 
 # 双击历史第 2 条 (8003) -> 直接拨号, 并验证历史被提到最前
-hist_click(hwnd, 1, LBN_DBLCLK)
-check("双击历史直接拨号", wait_log(hwnd, "拨号命令已发送", 8))
+hist_click(hwnd, 1)
+u.PostMessageW(u.GetDlgItem(hwnd, IDC_DIAL), BM_CLICK, 0, 0)
+check("选历史后点拨号成功", wait_log(hwnd, "拨号命令已发送", 8))
 
 time.sleep(1.0)
 _ini = open(INI, encoding="utf-8").read()
@@ -156,8 +155,8 @@ check("ini 记住主叫", "caller=3149" in _ini,
 check("新被叫提到历史最前", "callee_history=8003|8002" in _ini,
       [x for x in _ini.splitlines() if x.startswith("callee")])
 lst = hist_open(hwnd)
-check("历史列表同步为 2 条", u.SendMessageW(lst, LB_GETCOUNT, 0, 0) == 2,
-      "count=%d" % u.SendMessageW(lst, LB_GETCOUNT, 0, 0))
+check("下拉框历史同步为 2 条", u.SendMessageW(lst, CB_GETCOUNT, 0, 0) == 2,
+      "count=%d" % u.SendMessageW(lst, CB_GETCOUNT, 0, 0))
 check("被叫框保留刚拨号码", text_of(hwnd, IDC_CALLEE).strip() == "8003",
       "被叫框=[%s]" % text_of(hwnd, IDC_CALLEE))
 

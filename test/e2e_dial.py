@@ -31,20 +31,18 @@ IDC_CONNECT, IDC_DIAL, IDC_HANGUP, IDC_LOG = 1006, 1012, 1013, 1014
 IDC_HISTBTN, IDC_HISTLIST = 1018, 1019
 WM_GETTEXT, WM_GETTEXTLENGTH, BM_CLICK = 0x000D, 0x000E, 0x00F5
 CB_SETCURSEL = 0x014E
+CB_SHOWDROPDOWN = 0x014F
 WM_COMMAND, LB_SETCURSEL = 0x0111, 0x0186
 LBN_SELCHANGE = 1
 
 
 def hist_pick(hwnd, idx):
-    """打开历史列表并选中第 idx 条 (等价于用户点一下)"""
-    u.PostMessageW(u.GetDlgItem(hwnd, IDC_HISTBTN), BM_CLICK, 0, 0)
-    time.sleep(0.4)
-    lst = u.FindWindowW(None, HIST_TITLE)
-    u.SendMessageW(lst, LB_SETCURSEL, idx, 0)
-    u.SendMessageW(hwnd, WM_COMMAND, (LBN_SELCHANGE << 16) | IDC_HISTLIST, lst)
-    time.sleep(0.2)
+    """选中被叫历史下拉框的第 idx 条"""
+    u.SendMessageW(u.GetDlgItem(hwnd, IDC_CALLEE), CB_SETCURSEL, idx, 0)
+    time.sleep(0.25)
 
-# 测试前先清掉可能残留的实例 (单实例保护会让新进程直接退出)
+
+# 测试前先清掉可能残留的实例
 for _n in ("pbxdialer.exe", "\u62e8\u53f7.exe"):
     try:
         subprocess.run(["taskkill", "/F", "/IM", _n],

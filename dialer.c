@@ -61,8 +61,6 @@
 #define IDC_DIAG        1015
 #define IDC_COPYLOG     1016
 #define IDC_REFRESH     1017
-#define IDC_HISTBTN     1018   /* 被叫框右侧的"历史"下拉按钮 */
-#define IDC_HISTLIST    1019   /* 历史号码弹出列表 */
 
 /* 容量限制 */
 #define MAX_EXT   2000     /* 主叫下拉框最多容纳的分机数 (去重后) */
@@ -98,10 +96,9 @@ static HINSTANCE g_hInst;
 static HWND  g_hwnd, g_hHost, g_hPort, g_hUser, g_hPass, g_hToken;
 static HWND  g_hConnect, g_hDisconnect, g_hStatus;
 static HWND  g_hCaller, g_hCallee, g_hAuto, g_hDial, g_hHangup, g_hLog;
-static HWND  g_hHistBtn, g_hHistList;   /* 被叫历史: 按钮 + 弹出列表 */
+static HWND  g_hRefresh, g_hDiag, g_hCopyLog;   /* 右侧三个按钮 (字体要单独设) */
 static WNDPROC g_oldCalleeProc;         /* 被叫框/主叫框的原窗口过程 (回车拨号用) */
 static WNDPROC g_oldCallerEditProc;
-static WNDPROC g_oldHistListProc;
 static HFONT g_font, g_fontLog;
 static float g_sf = 1.0f;              /* DPI 缩放 */
 
@@ -522,8 +519,16 @@ static void fill_ui_from_settings(void) {
     SetWindowTextW(g_hToken, to_w(G.token, 200));
     if (G.caller[0])
         SetWindowTextW(g_hCaller, to_w(G.caller, 200));
-    if (g_hCallee && IsWindow(g_hCallee))
-        SetWindowTextW(g_hCallee, L"");     /* 被叫不自动回填 */
+    if (g_hCallee && IsWindow(g_hCallee)) {
+        SendMessageW(g_hCallee, CB_RESETCONTENT, 0, 0);
+        for (int i = 0; i < G.hist_n; i++) {
+            wchar_t *w = to_w(G.hist[i], 64);
+            SendMessageW(g_hCallee, CB_ADDSTRING, 0, (LPARAM)w);
+            free(w);
+        }
+        SendMessageW(g_hCallee, CB_SETCURSEL, (WPARAM)-1, 0);
+        SetWindowTextW(g_hCallee, L"");     /* 被叫不自动回填, 避免误拨 */
+    }
     /* 自动接通: 按 ini 恢复勾选状态 (默认勾选) */
     if (g_hAuto && IsWindow(g_hAuto))
         SendMessageW(g_hAuto, BM_SETCHECK,
@@ -1373,7 +1378,16 @@ static void on_dial(void) {
             G.hist_n = n + 1;
         }
         free(keep);
-        SetWindowTextW(g_hCallee, callee);   /* 拨完保留刚拨的号码, 方便再拨 */
+        if (g_hCallee && IsWindow(g_hCallee)) {
+            SendMessageW(g_hCallee, CB_RESETCONTENT, 0, 0);
+            for (int i = 0; i < G.hist_n; i++) {
+                wchar_t *w = to_w(G.hist[i], 64);
+                SendMessageW(g_hCallee, CB_ADDSTRING, 0, (LPARAM)w);
+                free(w);
+            }
+            SendMessageW(g_hCallee, CB_SETCURSEL, (WPARAM)-1, 0);
+            SetWindowTextW(g_hCallee, callee);   /* 拨完保留刚拨的号码, 方便再拨 */
+        }
         save_config();
     }
     SetFocus(g_hCallee);
@@ -1508,73 +1522,11 @@ static void on_hangup(void) {
 /* 窗口                                                                */
 /* ------------------------------------------------------------------ */
 
-/* ---------------- 被叫历史弹出列表 + 回车拨号 ---------------- */
+/* ---------------- 回车拨号 ---------------- */
 
-static int hist_visible(void) {
-    return g_hHistList && IsWindowVisible(g_hHistList);
-}
-
-static void hist_hide(void) {
-    if (hist_visible()) ShowWindow(g_hHistList, SW_HIDE);
-}
-
-/* 把列表里选中的那一行填进被叫框 */
-static void hist_fill_edit(void) {
-    int sel = (int)SendMessageW(g_hHistList, LB_GETCURSEL, 0, 0);
-    if (sel < 0) return;
-    wchar_t buf[64] = {0};
-    SendMessageW(g_hHistList, LB_GETTEXT, (WPARAM)sel, (LPARAM)buf);
-    SetWindowTextW(g_hCallee, buf);
-}
-
-static void hist_show(void) {
-    if (!g_hHistList) return;
-    SendMessageW(g_hHistList, LB_RESETCONTENT, 0, 0);
-    for (int i = 0; i < G.hist_n; i++) {
-        wchar_t *w = to_w(G.hist[i], 64);
-        SendMessageW(g_hHistList, LB_ADDSTRING, 0, (LPARAM)w);
-        free(w);
-    }
-    if (G.hist_n <= 0) { append_log(L"还没有历史号码, 拨过一次就有了"); return; }
-    int n = G.hist_n > 8 ? 8 : G.hist_n;
-    int ih = (int)SendMessageW(g_hHistList, LB_GETITEMHEIGHT, 0, 0);
-    if (ih <= 0) ih = SC(20);
-    RECT r;
-    GetWindowRect(g_hCallee, &r);
-    int w = r.right - r.left;
-    int h = n * ih + 4;
-    int y = r.bottom;                                  /* 默认往下弹 */
-    if (y + h > GetSystemMetrics(SM_CYSCREEN)) y = r.top - h;   /* 下面放不下就往上 */
-    SetWindowPos(g_hHistList, HWND_TOP, r.left, y, w, h, SWP_SHOWWINDOW);
-    SetFocus(g_hHistList);
-}
-
-/* 历史列表: 单击填入, 双击拨号, Esc 关闭, 回车拨号, 失焦自动收起 */
-static LRESULT CALLBACK HistListProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    if (m == WM_KILLFOCUS) {
-        ShowWindow(h, SW_HIDE);
-    } else if (m == WM_KEYDOWN) {
-        if (w == VK_ESCAPE) {
-            ShowWindow(h, SW_HIDE);
-            SetFocus(g_hCallee);
-            return 0;
-        }
-        if (w == VK_RETURN) {
-            hist_fill_edit();
-            ShowWindow(h, SW_HIDE);
-            SetFocus(g_hCallee);
-            on_dial();
-            return 0;
-        }
-    }
-    return CallWindowProcW(g_oldHistListProc, h, m, w, l);
-}
-
-/* 被叫框: 回车拨号 */
+/* 被叫框: 回车直接拨号 */
 static LRESULT CALLBACK CalleeKeyProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_KEYDOWN && w == VK_RETURN) { on_dial(); return 0; }
-    if (m == WM_KEYDOWN && w == VK_ESCAPE) { hist_hide(); return 0; }
-    if (m == WM_KEYDOWN && w == VK_DOWN) { hist_show(); return 0; }
     return CallWindowProcW(g_oldCalleeProc, h, m, w, l);
 }
 
@@ -1632,36 +1584,22 @@ static void create_ui(void) {
                                 SC(110), SC(155), SC(180), SC(240),
                                 g_hwnd, (HMENU)(INT_PTR)IDC_CALLER, g_hInst, NULL);
     mk_ctrl_plain(L"STATIC", L"被叫号码:", 0, 316, 158, 66, 20, 0);
-    g_hCallee = mk_ctrl(L"EDIT", L"", ES_AUTOHSCROLL, 386, 156, 190, 26, IDC_CALLEE);
-    g_hHistBtn = mk_ctrl_plain(L"BUTTON", L"▼", BS_PUSHBUTTON,
-                               578, 156, 22, 26, IDC_HISTBTN);
+    g_hCallee = CreateWindowExW(WS_EX_CLIENTEDGE, L"COMBOBOX", L"",
+                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                                CBS_DROPDOWN | CBS_AUTOHSCROLL,
+                                SC(386), SC(155), SC(210), SC(300),
+                                g_hwnd, (HMENU)(INT_PTR)IDC_CALLEE, g_hInst, NULL);
     g_hAuto = mk_ctrl_plain(L"BUTTON", L"自动接通",
-                            BS_AUTOCHECKBOX, 610, 159, 90, 20, IDC_AUTOANSWER);
+                            BS_AUTOCHECKBOX, 616, 159, 110, 20, IDC_AUTOANSWER);
     g_hDial   = mk_ctrl_plain(L"BUTTON", L"拨  号", BS_PUSHBUTTON, 110, 194, 130, 34, IDC_DIAL);
     g_hHangup = mk_ctrl_plain(L"BUTTON", L"挂  机", BS_PUSHBUTTON, 256, 194, 130, 34, IDC_HANGUP);
     if (G.show_diag) {
         /* 只有 ini 里 show_diag=1 才显示这两个按钮 */
-        mk_ctrl_plain(L"BUTTON", L"诊  断", BS_PUSHBUTTON, 402, 194, 100, 34, IDC_DIAG);
-        mk_ctrl_plain(L"BUTTON", L"刷新分机", BS_PUSHBUTTON, 510, 194, 110, 34, IDC_REFRESH);
-        mk_ctrl_plain(L"BUTTON", L"复制日志", BS_PUSHBUTTON, 628, 194, 130, 34, IDC_COPYLOG);
+        g_hDiag    = mk_ctrl_plain(L"BUTTON", L"诊  断", BS_PUSHBUTTON, 402, 194, 100, 34, IDC_DIAG);
+        g_hRefresh = mk_ctrl_plain(L"BUTTON", L"刷新分机", BS_PUSHBUTTON, 510, 194, 110, 34, IDC_REFRESH);
+        g_hCopyLog = mk_ctrl_plain(L"BUTTON", L"复制日志", BS_PUSHBUTTON, 628, 194, 130, 34, IDC_COPYLOG);
     } else {
-        mk_ctrl_plain(L"BUTTON", L"刷新分机", BS_PUSHBUTTON, 402, 194, 130, 34, IDC_REFRESH);
-    }
-
-    /* 被叫历史: 弹出式列表 (单击填入, 双击直接拨号)
-       注意: WS_POPUP 窗口的 hMenu 参数会被当成菜单句柄, 传控件 ID 会失败
-       (err=1401), 所以这里传 NULL, 窗口靠标题 "被叫历史" 识别。 */
-    g_hHistList = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"LISTBOX", L"被叫历史",
-                                  WS_POPUP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY |
-                                  LBS_NOINTEGRALHEIGHT | LBS_HASSTRINGS,
-                                  0, 0, 200, 200,
-                                  g_hwnd, NULL, g_hInst, NULL);
-    if (g_hHistList) {
-        g_oldHistListProc = (WNDPROC)SetWindowLongPtrW(g_hHistList, GWLP_WNDPROC,
-                                                       (LONG_PTR)HistListProc);
-    } else {
-        dbg_logf("[UI] 被叫历史列表创建失败 (err=%lu)", GetLastError());
-        append_logf(L"[警告] 被叫历史列表创建失败 (err=%lu)", GetLastError());
+        g_hRefresh = mk_ctrl_plain(L"BUTTON", L"刷新分机", BS_PUSHBUTTON, 402, 194, 130, 34, IDC_REFRESH);
     }
 
     /* 日志 */
@@ -1727,18 +1665,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case IDC_REFRESH:    on_refresh();    return 0;
         case IDC_COPYLOG:    on_copylog();    return 0;
         case IDC_AUTOANSWER: save_config();   return 0;   /* 勾选变化立即写入 ini */
-        case IDC_HISTBTN:
-            if (hist_visible()) hist_hide(); else hist_show();
-            return 0;
-        case IDC_HISTLIST:
-            if (HIWORD(wParam) == LBN_SELCHANGE) { hist_fill_edit(); return 0; }
-            if (HIWORD(wParam) == LBN_DBLCLK) {           /* 双击历史 = 直接拨号 */
-                hist_fill_edit();
-                hist_hide();
-                SetFocus(g_hCallee);
-                on_dial();
-            }
-            return 0;
         }
         break;
     case WM_CLOSE:
@@ -1823,9 +1749,15 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow) 
     load_config();
     create_ui();
     /* 回车拨号: 给被叫框/主叫框装键盘处理 */
-    if (g_hCallee)
-        g_oldCalleeProc = (WNDPROC)SetWindowLongPtrW(g_hCallee, GWLP_WNDPROC,
-                                                     (LONG_PTR)CalleeKeyProc);
+    if (g_hCallee) {
+        /* 组合框的焦点在编辑子窗口上, 钩它才能拦到回车 */
+        COMBOBOXINFO ci;
+        memset(&ci, 0, sizeof(ci));
+        ci.cbSize = sizeof(ci);
+        if (GetComboBoxInfo(g_hCallee, &ci) && ci.hwndItem)
+            g_oldCalleeProc = (WNDPROC)SetWindowLongPtrW(ci.hwndItem, GWLP_WNDPROC,
+                                                         (LONG_PTR)CalleeKeyProc);
+    }
     if (g_hCaller) {
         /* 注意: 只给组合框的编辑子窗口装钩子。直接给 COMBOBOX 本身 SetWindowLongPtr
            会导致 SetWindowTextW 失效(主叫回填不出来), 而焦点本来就在编辑子窗口上。 */
@@ -1840,9 +1772,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, PWSTR cmdLine, int nShow) 
     apply_font(g_hUser, g_font);    apply_font(g_hPass, g_font);
     apply_font(g_hToken, g_font);   apply_font(g_hStatus, g_font);
     apply_font(g_hCallee, g_font);  apply_font(g_hAuto, g_font);
-    apply_font(g_hHistBtn, g_font); apply_font(g_hHistList, g_font);
     apply_font(g_hConnect, g_font); apply_font(g_hDisconnect, g_font);
     apply_font(g_hDial, g_font);    apply_font(g_hHangup, g_font);
+    apply_font(g_hRefresh, g_font); /* 这三个之前漏了, 会退回系统默认字体, 和别的按钮不一致 */
+    apply_font(g_hDiag, g_font);    apply_font(g_hCopyLog, g_font);
     apply_font(g_hCaller, g_font);
     apply_font(g_hLog, g_fontLog);
 
