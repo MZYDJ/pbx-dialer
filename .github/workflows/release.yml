@@ -24,7 +24,7 @@ jobs:
 
       - name: 编译
         run: |
-          x86_64-w64-mingw32-gcc -O2 -municode -mwindows -static \
+          x86_64-w64-mingw32-gcc -O2 -s -municode -mwindows -static \
             dialer.c -o 拨号.exe \
             -lws2_32 -luser32 -lgdi32
           ls -l 拨号.exe
@@ -34,6 +34,7 @@ jobs:
         run: |
           mkdir -p pkg
           cp 拨号.exe 使用说明.txt 兼容性说明.md README.md pkg/
+          cp 拨号.exe pbx-dialer.exe          # 附件用 ASCII 文件名, 中文名会被 GitHub 改成 default.exe
           cd pkg && zip -r ../pbx-dialer-${{ github.ref_name }}-win64.zip .
           cd .. && ls -l pbx-dialer-*.zip
 
@@ -51,5 +52,5 @@ jobs:
             本包由 GitHub Actions 从该 tag 的源码自动编译（MinGW-w64，静态链接）。
           files: |
             pbx-dialer-${{ github.ref_name }}-win64.zip
-            拨号.exe
+            pbx-dialer.exe
           fail_on_unmatched_files: true
