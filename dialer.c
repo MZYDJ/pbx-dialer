@@ -267,6 +267,16 @@ static void dbg_logf(const char *fmt, ...) {
 /* 日志 / 状态 (供 UI 线程调用)                                        */
 /* ------------------------------------------------------------------ */
 
+/* 滚到最底部: 只靠 EM_SCROLLCARET 在只读、无焦点的编辑框里不生效,
+   这里显式把视图往下滚 (EM_LINESCROLL 会自动夹到末尾) */
+static void log_scroll_to_end(void) {
+    if (!g_hLog || !IsWindow(g_hLog)) return;
+    SendMessageW(g_hLog, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+    /* 注意: 这里不能再发 EM_SCROLLCARET —— 只读、无焦点的编辑框里光标停在 0,
+       它会立刻把视图滚回顶部, 等于白滚。EM_LINESCROLL 自己会夹到末尾。 */
+    SendMessageW(g_hLog, EM_LINESCROLL, 0, (LPARAM)0x7FFF);
+}
+
 static void append_log(const wchar_t *line) {
     if (!g_hLog || !IsWindow(g_hLog)) return;
 
@@ -296,8 +306,7 @@ static void append_log(const wchar_t *line) {
     lstrcpynW(buf + slen + wcslen(ts) + linelen, L"\r\n", 3);
     SetWindowTextW(g_hLog, buf);
     free(buf);
-    SendMessageW(g_hLog, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-    SendMessageW(g_hLog, EM_SCROLLCARET, 0, 0);
+    log_scroll_to_end();          /* 始终停在最新一条 */
 }
 
 static void append_logf(const wchar_t *fmt, ...) {
@@ -1603,11 +1612,11 @@ static void create_ui(void) {
     }
 
     /* 日志 */
-    mk_ctrl_plain(L"BUTTON", L"状态日志", BS_GROUPBOX, 10, 260, 760, 292, 0);
+    mk_ctrl_plain(L"BUTTON", L"状态日志", BS_GROUPBOX, 10, 252, 760, 290, 0);
     g_hLog = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                              WS_CHILD | WS_VISIBLE | WS_VSCROLL |
                              ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-                             SC(20), SC(272), SC(740), SC(272),
+                             SC(20), SC(280), SC(740), SC(252),
                              g_hwnd, (HMENU)(INT_PTR)IDC_LOG, g_hInst, NULL);
 }
 
