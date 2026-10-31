@@ -1,0 +1,32 @@
+﻿name: 清理旧附件（一次性）
+
+# 只发 zip 之后，把历史 Release 上单独的 exe 附件删掉。
+# 跑完就可以把这个文件和 cleanup-trigger 一起删掉。
+on:
+  push:
+    paths:
+      - '.github/cleanup-trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const rels = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100
+            });
+            for (const r of rels) {
+              for (const a of r.assets) {
+                if (a.name === 'pbx-dialer.exe' || a.name === 'default.exe') {
+                  await github.rest.repos.deleteReleaseAsset({
+                    owner: context.repo.owner, repo: context.repo.repo, asset_id: a.id
+                  });
+                  core.info(`deleted ${r.tag_name} / ${a.name}`);
+                }
+              }
+            }
