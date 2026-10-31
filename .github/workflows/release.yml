@@ -34,7 +34,6 @@ jobs:
         run: |
           mkdir -p pkg
           cp 拨号.exe 使用说明.txt 兼容性说明.md README.md pkg/
-          cp 拨号.exe pbx-dialer.exe          # 附件用 ASCII 文件名, 中文名会被 GitHub 改成 default.exe
           cd pkg && zip -r ../pbx-dialer-${{ github.ref_name }}-win64.zip .
           cd .. && ls -l pbx-dialer-*.zip
 
@@ -44,6 +43,7 @@ jobs:
           name: ${{ github.ref_name }}
           body: |
             单文件绿色版 Windows 拨号器（国威 Smart PBX Manager 的 MQTT 接口）。
+            下载下面的 zip，解压后双击 `拨号.exe` 即可。
 
             - 免安装：解压后双击 `拨号.exe`
             - 首次运行会被 SmartScreen 拦一下：更多信息 → 仍要运行
@@ -52,5 +52,4 @@ jobs:
             本包由 GitHub Actions 从该 tag 的源码自动编译（MinGW-w64，静态链接）。
           files: |
             pbx-dialer-${{ github.ref_name }}-win64.zip
-            pbx-dialer.exe
           fail_on_unmatched_files: true
