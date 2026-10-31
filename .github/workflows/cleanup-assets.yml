@@ -1,0 +1,30 @@
+﻿name: 删除冗余 Release（一次性）
+
+# v1.4.7 只是改了 CI 打包方式，程序与 v1.4.6 完全一致，删掉它。
+on:
+  push:
+    paths:
+      - '.github/cleanup-trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = 'v1.4.7';
+            try {
+              const { data: rel } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner, repo: context.repo.repo, tag
+              });
+              await github.rest.repos.deleteRelease({
+                owner: context.repo.owner, repo: context.repo.repo, release_id: rel.id
+              });
+              core.info(`deleted release ${tag}`);
+            } catch (e) {
+              core.info(`no release ${tag}: ${e.message}`);
+            }
