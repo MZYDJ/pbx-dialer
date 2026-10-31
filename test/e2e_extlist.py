@@ -130,29 +130,32 @@ items = combo_items(hwnd)
 check("跳过无效项并去重", len(items) == 2 and items[0].startswith("3401"),
       "共%d个: %s" % (len(items), items))
 
-# 变体 D: 真实 PBX 的大列表 (450 个, 字段名 fullname/ipaddr, 多行格式化 JSON)
-# 用于回归 "只显示 200 个" 的问题
+# 变体 D: 大列表 + 混入未注册的 (默认只显示已注册)
 big = []
 for i in range(450):
     n = str(1000 + i)
-    e = {"fullname": "", "type": "SIP", "status": "Unavailable", "number": n}
-    if i == 0:
-        e["status"] = "Idle"
-        e["ipaddr"] = "sip:%s@192.168.8.171:5060" % n
+    e = {"fullname": "", "type": "SIP", "status": "Idle", "number": n}
+    if i > 0 and i % 45 == 0:
+        e["status"] = "Unavailable"          # 每 45 个里埋 1 个未注册的
     big.append(e)
+unreg = sum(1 for e in big if e["status"] == "Unavailable")
+reg = len(big) - unreg
 payload_d = {"status": "Success", "message": "success", "request_id": "d1", "extlist": big}
 _body = json.dumps(payload_d, ensure_ascii=False, indent=2)
 print("变体 D 报文长度: %d 字节" % len(_body.encode("utf-8")), flush=True)
 cl.publish(RESP, _body)
 time.sleep(4)
 items = combo_items(hwnd)
-check("大列表不被 200 截断", len(items) >= 450,
+check("大列表不被 200 截断", len(items) >= reg,
       "共%d个, 末位=%s" % (len(items), items[-1] if items else "-"))
+check("未注册的分机被过滤", len(items) == reg,
+      "期望 %d 个, 实际 %d 个" % (reg, len(items)))
 h_log = u.GetDlgItem(hwnd, IDC_LOG)
 _n = u.SendMessageW(h_log, 0x000E, 0, 0)
 _b = ctypes.create_unicode_buffer(_n + 1)
 u.SendMessageW(h_log, 0x000D, _n + 1, ctypes.addressof(_b))
-check("日志报出分机总数", "共 450 个分机" in _b.value)
+check("日志报出已注册/总数", ("已注册 %d 个 / 共 %d 个" % (reg, len(big))) in _b.value,
+      [l for l in _b.value.splitlines() if "分机列表已刷新" in l][-1:])
 check("大列表后进程仍存活 (堆未损坏)", proc.poll() is None, "rc=%s" % proc.poll())
 _ph = u.GetDlgItem(hwnd, IDC_CALLER)
 _pn = u.SendMessageW(_ph, 0x000E, 0, 0)
@@ -161,6 +164,20 @@ u.SendMessageW(_ph, 0x000D, _pn + 1, ctypes.addressof(_pb))
 caller_txt = _pb
 check("大列表后主叫仍是手输的 3149", caller_txt.value.strip() == "3149",
       "主叫框=[%s]" % caller_txt.value)
+
+# 变体 E: 全部标成 Unavailable -> 应退回"显示全部", 不能一个都没有
+allun = [{"number": str(5000 + i), "username": "", "type": "SIP", "status": "Unavailable"}
+         for i in range(12)]
+cl.publish(RESP, json.dumps({"status": "Success", "message": "success",
+                             "request_id": "e1", "extlist": allun}, ensure_ascii=False))
+time.sleep(3)
+items = combo_items(hwnd)
+check("全部未注册时退回显示全部", len(items) == 12,
+      "共%d个" % len(items))
+_n = u.SendMessageW(h_log, 0x000E, 0, 0)
+_b = ctypes.create_unicode_buffer(_n + 1)
+u.SendMessageW(h_log, 0x000D, _n + 1, ctypes.addressof(_b))
+check("日志给出提示", "Unavailable" in _b.value and "only_registered" in _b.value)
 
 cl.loop_stop()
 h = u.GetDlgItem(hwnd, IDC_LOG)

@@ -90,6 +90,7 @@ typedef struct {
     int  cmd_qos;          /* 命令 QoS: 0 或 1 (默认 1) */
     int  autoanswer;       /* 拨号时是否自动接通 (autoanswer=yes), 默认 1=勾选 */
     int  show_diag;        /* 是否显示 [诊断]/[复制日志] 按钮, 默认 0=不显示 */
+    int  only_registered;  /* 分机列表只显示已注册的, 默认 1=只显示已注册 */
 } Settings;
 
 static HINSTANCE g_hInst;
@@ -413,6 +414,7 @@ static void load_config(void) {
     G.cmd_qos = 1;
     G.autoanswer = 1;               /* 默认勾选"自动接通" */
     G.show_diag = 0;                /* 默认不显示 [诊断]/[复制日志] */
+    G.only_registered = 1;          /* 默认只显示已注册的分机 */
 
     HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -456,6 +458,7 @@ static void load_config(void) {
             else if (!strcmp(line, "cmd_qos"))      G.cmd_qos = atoi(val);
             else if (!strcmp(line, "autoanswer"))   G.autoanswer = parse_bool(val);
             else if (!strcmp(line, "show_diag"))    G.show_diag = parse_bool(val);
+            else if (!strcmp(line, "only_registered")) G.only_registered = parse_bool(val);
         }
         line = strtok_r(NULL, "\r\n", &save);
     }
@@ -491,10 +494,11 @@ static void save_config(void) {
     if (!buf) { CloseHandle(h); return; }
     int n = sprintf(buf,
         "host=%s\r\nport=%d\r\nuser=%s\r\npass=%s\r\ntoken=%s\r\ncaller=%s\r\n"
-        "callee_history=%s\r\nautoanswer=%d\r\nshow_diag=%d\r\n"
+        "callee_history=%s\r\nautoanswer=%d\r\nshow_diag=%d\r\nonly_registered=%d\r\n"
         "topic_system=%s\r\ntopic_call=%s\r\nsub_extra=%s\r\ndial_extra=%s\r\n"
         "test_topic=%s\r\ntest_payload=%s\r\ncmd_qos=%d\r\n",
         G.host, G.port, G.user, G.pass, G.token, G.caller, hist, G.autoanswer, G.show_diag,
+        G.only_registered,
         G.topic_system, G.topic_call, G.sub_extra, G.dial_extra,
         G.test_topic, G.test_payload, G.cmd_qos);
     DWORD w = 0;
@@ -1070,9 +1074,23 @@ static DWORD WINAPI mqtt_thread(LPVOID param) {
 /* ------------------------------------------------------------------ */
 
 /* 往主叫下拉框里加一个分机 (自动去重) */
-static int ext_add(const char *number, const char *username,
+static int g_ext_total;    /* 本次解析到的分机总数 (含未注册) */
+static int g_ext_skip;     /* 因"未注册"被隐藏的个数 */
+static int g_ext_filter;   /* 1 = 正在过滤未注册 */
+
+/* 这些状态说明分机没注册/不可用; Idle/InUse/Ringing/Busy 都是可用状态 */
+static int ext_unregistered(const char *st) {
+    if (!st || !st[0]) return 0;
+    return !_stricmp(st, "Unavailable") || !_stricmp(st, "Unregistered") ||
+           !_stricmp(st, "Offline")     || !_stricmp(st, "Disabled") ||
+           !_stricmp(st, "Unreachable");
+}
+
+static int ext_add(const char *number, const char *username, const char *status,
                    char seen[][32], int *seen_n, int maxseen) {
     if (!number || !number[0]) return 0;
+    g_ext_total++;
+    if (g_ext_filter && ext_unregistered(status)) { g_ext_skip++; return 0; }
     for (int i = 0; i < *seen_n; i++)
         if (!strcmp(seen[i], number)) return 0;     /* 已存在 */
     if (*seen_n >= maxseen) return 0;
@@ -1105,11 +1123,12 @@ static int ext_scan_objects(const char *begin, const char *end,
         if (clen > (int)sizeof(chunk) - 1) clen = (int)sizeof(chunk) - 1;
         memcpy(chunk, cs, (size_t)clen);
         chunk[clen] = 0;
-        char number[64] = {0}, username[128] = {0};
+        char number[64] = {0}, username[128] = {0}, status[32] = {0};
         json_get_str(chunk, "number", number, 64);
         json_get_str(chunk, "username", username, 128);
         if (!username[0]) json_get_str(chunk, "fullname", username, 128);
-        count += ext_add(number, username, seen, seen_n, maxseen);
+        json_get_str(chunk, "status", status, 32);
+        count += ext_add(number, username, status, seen, seen_n, maxseen);
         q = ce + 1;
     }
     return count;
@@ -1120,7 +1139,7 @@ static int ext_scan_numbers(const char *json, char seen[][32], int *seen_n, int 
     int count = 0;
     const char *q = json;
     while ((q = strstr(q, "\"number\"")) != NULL) {
-        char number[64] = {0}, username[128] = {0};
+        char number[64] = {0}, username[128] = {0}, status[32] = {0};
         if (json_get_str(q, "number", number, 64) && number[0]) {
             /* 同一对象里往后找 username / fullname */
             const char *obj_end = strchr(q, '}');
@@ -1128,23 +1147,25 @@ static int ext_scan_numbers(const char *json, char seen[][32], int *seen_n, int 
             const char *fn = strstr(q, "\"fullname\"");
             if (un && (!obj_end || un < obj_end)) json_get_str(un, "username", username, 128);
             else if (fn && (!obj_end || fn < obj_end)) json_get_str(fn, "fullname", username, 128);
-            count += ext_add(number, username, seen, seen_n, maxseen);
+            json_get_str(q, "status", status, 32);
+            count += ext_add(number, username, status, seen, seen_n, maxseen);
         }
         q += 8;
     }
     return count;
 }
 
-static void parse_extlist(const char *json) {
-    /* 记住当前主叫框内容 (可能是手输的号码, 也可能是选中了列表项) */
-    wchar_t cur[256] = {0};
-    GetWindowTextW(g_hCaller, cur, 255);
-
+/* 把 json 里的分机灌进主叫下拉框; filter=1 时跳过未注册的。返回显示条数 */
+static int ext_fill_combo(const char *json, int filter) {
     SendMessageW(g_hCaller, CB_RESETCONTENT, 0, 0);
     SendMessageW(g_hCaller, CB_INITSTORAGE, (WPARAM)MAX_EXT, (LPARAM)(MAX_EXT * 12));
     static char seen[MAX_EXT][32];
     int seen_n = 0;
     int count = 0;
+
+    g_ext_total = 0;
+    g_ext_skip = 0;
+    g_ext_filter = filter;
 
     /* 1) 标准位置: "extlist": [ ... ] */
     const char *arr = strstr(json, "\"extlist\"");
@@ -1157,11 +1178,34 @@ static void parse_extlist(const char *json) {
             count = ext_scan_objects(begin, endp, seen, &seen_n, MAX_EXT);
         }
     }
-    /* 2) 没有 extlist 或里面没解析出东西: 全局兜底扫描 */
-    if (count == 0) {
+    /* 2) 没有 extlist 或里面没解析出任何对象: 全局兜底扫描
+       注意: 判断依据必须是"解析到几个"(g_ext_total), 不能用"加进去几个"(count) ——
+       过滤未注册时 count 可能为 0, 那样会重复扫一遍, 总数翻倍。 */
+    if (g_ext_total == 0) {
         const char *jend = json + strlen(json);
         count = ext_scan_objects(json, jend, seen, &seen_n, MAX_EXT);
-        if (count == 0) count = ext_scan_numbers(json, seen, &seen_n, MAX_EXT);
+        if (g_ext_total == 0) count = ext_scan_numbers(json, seen, &seen_n, MAX_EXT);
+    }
+    g_ext_filter = 0;
+    return count;
+}
+
+static void parse_extlist(const char *json) {
+    /* 记住当前主叫框内容 (可能是手输的号码, 也可能是选中了列表项) */
+    wchar_t cur[256] = {0};
+    GetWindowTextW(g_hCaller, cur, 255);
+
+    int count = ext_fill_combo(json, G.only_registered);
+    int total = g_ext_total, skipped = g_ext_skip;
+
+    /* 兜底: 整份列表都被标成未注册, 多半是固件不返回 status,
+       这时退回"全部显示", 免得一个分机都选不了 */
+    if (G.only_registered && count == 0 && total > 0) {
+        count = ext_fill_combo(json, 0);
+        total = g_ext_total;
+        skipped = 0;
+        append_log(L"注意: 分机状态全是 Unavailable, 已改为显示全部");
+        append_log(L"      可能是固件不返回 status; 也可把 ini 里 only_registered 改成 0");
     }
 
     /* 恢复主叫: 能对上列表项就选中它; 对不上(手输号码)就原样保留, 不要覆盖 */
@@ -1192,7 +1236,11 @@ static void parse_extlist(const char *json) {
         }
     }
 
-    append_logf(L"分机列表已刷新: 共 %d 个分机", count);
+    if (skipped > 0)
+        append_logf(L"分机列表已刷新: 已注册 %d 个 / 共 %d 个 (未注册的 %d 个已隐藏)",
+                    count, total, skipped);
+    else
+        append_logf(L"分机列表已刷新: 共 %d 个分机", count);
     if (count >= MAX_EXT)
         append_logf(L"注意: 已达显示上限 %d 个, 更多分机请直接在框里输入号码", MAX_EXT);
     if (count == 0) {

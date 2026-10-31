@@ -12,7 +12,7 @@
 
 - **单文件 138 KB**：静态链接，无 VC 运行库依赖，U 盘拷过去双击即用
 - **零第三方依赖**：MQTT 3.1.1 客户端（QoS0/1、keepalive、自动重连）是自己手写的
-- **主叫分机实时拉取**：从 PBX 读分机列表（上限 2000 个），也可以直接手输号码
+- **主叫分机实时拉取**：从 PBX 读分机列表，**只显示已注册的**（`status` 为 `Unavailable` 的隐藏），上限 2000 个，也可以直接手输号码
 - **回车即拨**：被叫框回车拨号；主叫框回车时被叫有号码就拨、没号码就跳过去
 - **被叫历史**：最近 12 个号码的下拉框（和主叫一样），选中即填入
 - **自动接通**：勾选后对方接起即接通（`autoanswer=yes`），状态记在 ini
@@ -81,6 +81,7 @@ gcc -O2 -municode -mwindows -static dialer.c -o 拨号.exe -lws2_32 -luser32 -lg
 | `callee_history` | 被叫历史，`\|` 分隔，最近的在前 |
 | `autoanswer` | 拨号是否自动接通，1/0（默认 1） |
 | `show_diag` | 是否显示【诊断】【复制日志】按钮，1/0（默认 0） |
+| `only_registered` | 主叫下拉框只列已注册分机，1/0（默认 1） |
 | `topic_system` / `topic_call` | 命令主题模板，默认 `device/%s/api/v1.0/command/{system,call}` |
 | `sub_extra` | 额外订阅主题，`;` 分隔（默认已订阅 `device/%s/#`） |
 | `dial_extra` | 拨号报文追加片段，如 `"dialpermission":"8001"` |
@@ -109,7 +110,7 @@ python fake_pbx.py            # 起模拟 PBX
 python e2e_ui.py <exe路径>     # 界面 / 回车 / 双击历史
 ```
 
-当前 **72 项全部通过**：dial 9 + caller 14 + extlist 7 + ini 5 + diag 5 + autoanswer 12 + ui 20。
+当前 **75 项全部通过**：dial 9 + caller 14 + extlist 10 + ini 5 + diag 5 + autoanswer 12 + ui 20。
 详见 [test/README.txt](test/README.txt)。
 
 ## 已知限制
