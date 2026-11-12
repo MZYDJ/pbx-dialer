@@ -110,7 +110,7 @@ python fake_pbx.py            # 起模拟 PBX
 python e2e_ui.py <exe路径>     # 界面 / 回车 / 双击历史
 ```
 
-当前 **75 项全部通过**：dial 9 + caller 14 + extlist 10 + ini 5 + diag 5 + autoanswer 12 + ui 20。
+当前 **82 项全部通过**：dial 9 + caller 14 + extlist 10 + ini 5 + diag 5 + autoanswer 12 + ui 20 + events 7。
 详见 [test/README.txt](test/README.txt)。
 
 ## 已知限制

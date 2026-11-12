@@ -1254,6 +1254,27 @@ static void parse_extlist(const char *json) {
 /* 收到 MQTT 包 (UI 线程)                                              */
 /* ------------------------------------------------------------------ */
 
+/* 同一条报文在短时间内重复到达时只处理一次。
+   实测现场 PBX 会把同一条 event / extension_list 连发两三遍
+   (多半是 retain + 实时各来一次), 不去重的话日志会成对重复、下拉框也会反复重建。 */
+static unsigned int g_dup_hash;
+static DWORD        g_dup_tick;
+static int dup_packet(const char *json, DWORD window_ms) {
+    unsigned int h = 2166136261u;
+    for (const unsigned char *p = (const unsigned char *)json; *p; p++) {
+        h ^= *p;
+        h *= 16777619u;
+    }
+    DWORD now = GetTickCount();
+    if (h == g_dup_hash && (DWORD)(now - g_dup_tick) < window_ms) {
+        g_dup_tick = now;
+        return 1;
+    }
+    g_dup_hash = h;
+    g_dup_tick = now;
+    return 0;
+}
+
 static void handle_packet(char *packed) {
     /* packed = "topic\x01payload" */
     char *sep = strchr(packed, '\x01');
@@ -1262,6 +1283,9 @@ static void handle_packet(char *packed) {
     if (sep) { *sep = 0; json = sep + 1; }
 
     char status[64] = {0}, message[256] = {0}, ev[64] = {0};
+
+    /* 同一份报文 1.5 秒内重复到达 -> 丢掉, 免得日志成对重复、列表反复重建 */
+    if (dup_packet(json, 1500)) return;
 
     if (strstr(json, "extlist") || strstr(json, "\"number\"")) {
         /* 分机列表: 不论主题/字段名, 只要带分机号就按列表处理 */
@@ -1291,11 +1315,23 @@ static void handle_packet(char *packed) {
             g_last_callid[0] = 0;
             g_last_channelid[0] = 0;
         } else if (strcmp(ev, "callstatus") == 0) {
+            /* 这个事件文档里没有, 不同固件字段名不一样, 多试几个 */
             json_get_str(json, "extension", a, 64);
+            if (!a[0]) json_get_str(json, "caller", a, 64);
+            if (!a[0]) json_get_str(json, "from", a, 64);
+            if (!a[0]) json_get_str(json, "src", a, 64);
             json_get_str(json, "status", b, 64);
+            if (!b[0]) json_get_str(json, "state", b, 64);
             json_get_str(json, "callid", c, 64);
-            append_logf(L"通话状态: 分机 %hs %hs (callid=%hs)",
-                        a[0] ? a : "?", b[0] ? b : "?", c[0] ? c : "-");
+            if (!a[0] && !b[0]) {
+                /* 字段名对不上: 把原始报文打出来, 方便定位该按什么解析 */
+                wchar_t *w = to_w(json, 200);
+                append_logf(L"通话状态: (字段未识别) %ls", w ? w : L"");
+                free(w);
+            } else {
+                append_logf(L"通话状态: 分机 %hs %hs (callid=%hs)",
+                            a[0] ? a : "?", b[0] ? b : "?", c[0] ? c : "-");
+            }
         } else if (ev[0]) {
             append_logf(L"事件: %hs", ev);
         } else {
